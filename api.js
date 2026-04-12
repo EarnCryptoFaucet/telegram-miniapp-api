@@ -4,19 +4,31 @@ import cors from 'cors';
 
 const app = express();
 
-// ========== CORS CONFIGURATION (FIX) ==========
+// CORS تنظیمات
 app.use(cors({
-    origin: '*', // Allow all origins (or specify your GitHub Pages URL)
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
 
-// ========== SUPABASE CONFIGURATION ==========
+// Supabase تنظیمات
 const SUPABASE_URL = "https://yeexmptexqthwszknwuf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_SFZv_qcbdsO1sv1cHitKZw_V7W25RIn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// حافظه موقت برای جلوگیری از دابل کلیک
+const usedActions = new Set();
+
+// پاک کردن خودکار حافظه هر 24 ساعت
+setInterval(() => {
+    usedActions.clear();
+    console.log("🧹 Cleaned usedActions cache");
+}, 24 * 60 * 60 * 1000);
+
+// مقادیر مجاز جایزه
+const VALID_REWARDS = [10, 20, 100, 500, 1000];
 
 // ========== API: Health Check ==========
 app.get('/api/health', (req, res) => {
@@ -27,22 +39,35 @@ app.get('/api/health', (req, res) => {
 app.post('/api/claim-reward', async (req, res) => {
     const { telegram_id, reward, action_id } = req.body;
     
-    console.log(`💰 Claim request: userId=${telegram_id}, amount=${reward}, actionId=${action_id}`);
+    console.log(`💰 Claim: user=${telegram_id}, amount=${reward}, action=${action_id}`);
+    
+    // بررسی وجود فیلدهای الزامی
+    if (!telegram_id || !reward || !action_id) {
+        return res.json({ ok: false, error: "missing_fields" });
+    }
+    
+    // بررسی تکراری نبودن در حافظه
+    if (usedActions.has(action_id)) {
+        console.log("⚠️ Duplicate!");
+        return res.json({ ok: false, error: "duplicate" });
+    }
+    
+    // بررسی معتبر بودن مقدار جایزه
+    if (!VALID_REWARDS.includes(reward)) {
+        console.log(`❌ Invalid reward: ${reward}`);
+        return res.json({ ok: false, error: "invalid_reward" });
+    }
+    
+    // بررسی محدوده جایزه
+    if (reward < 0 || reward > 1000) {
+        return res.json({ ok: false, error: "reward_out_of_range" });
+    }
+    
+    // ذخیره در حافظه موقت
+    usedActions.add(action_id);
     
     try {
-        // 1. Check for duplicate action_id
-        const { data: existing, error: checkError } = await supabase
-            .from('reward_claims')
-            .select('id')
-            .eq('action_id', action_id)
-            .single();
-        
-        if (existing) {
-            console.log("⚠️ Duplicate action detected!");
-            return res.json({ ok: false, error: "duplicate" });
-        }
-        
-        // 2. Get current user data
+        // گرفتن اطلاعات کاربر از دیتابیس
         const { data: userData, error: userError } = await supabase
             .from('users')
             .select('total_coins')
@@ -50,24 +75,25 @@ app.post('/api/claim-reward', async (req, res) => {
             .single();
         
         if (userError || !userData) {
+            usedActions.delete(action_id);
             return res.json({ ok: false, error: "user_not_found" });
         }
         
-        const currentCoins = userData.total_coins || 0;
-        const newCoins = currentCoins + reward;
+        const newCoins = (userData.total_coins || 0) + reward;
         
-        // 3. Update user's coins
+        // به روز رسانی سکه کاربر
         const { error: updateError } = await supabase
             .from('users')
             .update({ total_coins: newCoins, last_sync: new Date().toISOString() })
             .eq('telegram_id', telegram_id);
         
         if (updateError) {
+            usedActions.delete(action_id);
             throw updateError;
         }
         
-        // 4. Record the claim
-        const { error: claimError } = await supabase
+        // ثبت تاریخچه تراکنش
+        await supabase
             .from('reward_claims')
             .insert({
                 action_id: action_id,
@@ -75,15 +101,12 @@ app.post('/api/claim-reward', async (req, res) => {
                 amount: reward
             });
         
-        if (claimError) {
-            console.error("Claim record error:", claimError);
-        }
-        
-        console.log(`✅ Reward claimed! New coins: ${newCoins}`);
+        console.log(`✅ Success! New coins: ${newCoins}`);
         return res.json({ ok: true, newCoins: newCoins });
         
     } catch (error) {
-        console.error("❌ Server error:", error);
+        console.error("❌ Error:", error);
+        usedActions.delete(action_id);
         return res.json({ ok: false, error: "server_error" });
     }
 });
@@ -105,9 +128,8 @@ app.get('/api/user/:telegram_id', async (req, res) => {
     return res.json({ ok: true, user: data });
 });
 
-// ========== START SERVER ==========
+// ========== شروع سرور ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ API Server running on port ${PORT}`);
-    console.log(`✅ CORS enabled for all origins`);
+    console.log(`✅ Server running on port ${PORT}`);
 });
