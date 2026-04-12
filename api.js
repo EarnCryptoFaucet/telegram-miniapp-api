@@ -1,14 +1,27 @@
-// api.js - سرور API برای مدیریت جایزه‌ها
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
+import cors from 'cors';
 
 const app = express();
+
+// ========== CORS CONFIGURATION (FIX) ==========
+app.use(cors({
+    origin: '*', // Allow all origins (or specify your GitHub Pages URL)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // ========== SUPABASE CONFIGURATION ==========
 const SUPABASE_URL = "https://yeexmptexqthwszknwuf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_SFZv_qcbdsO1sv1cHitKZw_V7W25RIn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ========== API: Health Check ==========
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // ========== API: Claim Reward ==========
 app.post('/api/claim-reward', async (req, res) => {
@@ -92,13 +105,9 @@ app.get('/api/user/:telegram_id', async (req, res) => {
     return res.json({ ok: true, user: data });
 });
 
-// ========== API: Health Check ==========
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ API Server running on port ${PORT}`);
+    console.log(`✅ CORS enabled for all origins`);
 });
