@@ -4,70 +4,70 @@ import cors from 'cors';
 
 const app = express();
 
-// CORS تنظیمات
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json());
 
-// Supabase تنظیمات
 const SUPABASE_URL = "https://yeexmptexqthwszknwuf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_SFZv_qcbdsO1sv1cHitKZw_V7W25RIn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// حافظه موقت برای جلوگیری از دابل کلیک
+// ========== IDEMPOTENCY (جلوگیری از دابل کلیک) ==========
 const usedActions = new Set();
 
-// پاک کردن خودکار حافظه هر 24 ساعت
 setInterval(() => {
     usedActions.clear();
     console.log("🧹 Cleaned usedActions cache");
 }, 24 * 60 * 60 * 1000);
 
-// مقادیر مجاز جایزه
+// ========== RATE LIMIT (محدودیت سرعت) ==========
+const rateLimit = new Map();
+
+// ========== VALID REWARDS ==========
 const VALID_REWARDS = [10, 20, 100, 500, 1000];
 
-// ========== API: Health Check ==========
+// ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ========== API: Claim Reward ==========
+// ========== CLAIM REWARD ==========
 app.post('/api/claim-reward', async (req, res) => {
     const { telegram_id, reward, action_id } = req.body;
     
     console.log(`💰 Claim: user=${telegram_id}, amount=${reward}, action=${action_id}`);
     
-    // بررسی وجود فیلدهای الزامی
+    // 1. بررسی وجود فیلدها
     if (!telegram_id || !reward || !action_id) {
         return res.json({ ok: false, error: "missing_fields" });
     }
     
-    // بررسی تکراری نبودن در حافظه
+    // 2. RATE LIMIT CHECK (جدید)
+    const now = Date.now();
+    const lastRequest = rateLimit.get(telegram_id) || 0;
+    if (now - lastRequest < 3000) {
+        console.log(`⚠️ Rate limit hit for user ${telegram_id}`);
+        return res.json({ ok: false, error: "too_fast", message: "Please wait 3 seconds between requests" });
+    }
+    rateLimit.set(telegram_id, now);
+    
+    // 3. بررسی دابل کلیک
     if (usedActions.has(action_id)) {
         console.log("⚠️ Duplicate!");
         return res.json({ ok: false, error: "duplicate" });
     }
     
-    // بررسی معتبر بودن مقدار جایزه
+    // 4. بررسی مقدار جایزه
     if (!VALID_REWARDS.includes(reward)) {
-        console.log(`❌ Invalid reward: ${reward}`);
         return res.json({ ok: false, error: "invalid_reward" });
     }
     
-    // بررسی محدوده جایزه
     if (reward < 0 || reward > 1000) {
         return res.json({ ok: false, error: "reward_out_of_range" });
     }
     
-    // ذخیره در حافظه موقت
     usedActions.add(action_id);
     
     try {
-        // گرفتن اطلاعات کاربر از دیتابیس
         const { data: userData, error: userError } = await supabase
             .from('users')
             .select('total_coins')
@@ -81,7 +81,6 @@ app.post('/api/claim-reward', async (req, res) => {
         
         const newCoins = (userData.total_coins || 0) + reward;
         
-        // به روز رسانی سکه کاربر
         const { error: updateError } = await supabase
             .from('users')
             .update({ total_coins: newCoins, last_sync: new Date().toISOString() })
@@ -92,14 +91,7 @@ app.post('/api/claim-reward', async (req, res) => {
             throw updateError;
         }
         
-        // ثبت تاریخچه تراکنش
-        await supabase
-            .from('reward_claims')
-            .insert({
-                action_id: action_id,
-                user_id: telegram_id,
-                amount: reward
-            });
+        await supabase.from('reward_claims').insert({ action_id, user_id: telegram_id, amount: reward });
         
         console.log(`✅ Success! New coins: ${newCoins}`);
         return res.json({ ok: true, newCoins: newCoins });
@@ -111,7 +103,7 @@ app.post('/api/claim-reward', async (req, res) => {
     }
 });
 
-// ========== API: Get User Info ==========
+// ========== GET USER INFO ==========
 app.get('/api/user/:telegram_id', async (req, res) => {
     const { telegram_id } = req.params;
     
@@ -128,7 +120,6 @@ app.get('/api/user/:telegram_id', async (req, res) => {
     return res.json({ ok: true, user: data });
 });
 
-// ========== شروع سرور ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
