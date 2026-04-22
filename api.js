@@ -11,23 +11,78 @@ const SUPABASE_URL = "https://yeexmptexqthwszknwuf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_SFZv_qcbdsO1sv1cHitKZw_V7W25RIn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ========== IDEMPOTENCY (جلوگیری از دابل کلیک) ==========
+// Rate limit and idempotency
 const usedActions = new Set();
-
-setInterval(() => {
-    usedActions.clear();
-    console.log("🧹 Cleaned usedActions cache");
-}, 24 * 60 * 60 * 1000);
-
-// ========== RATE LIMIT (محدودیت سرعت) ==========
 const rateLimit = new Map();
 
-// ========== VALID REWARDS ==========
+setInterval(() => { usedActions.clear(); }, 24 * 60 * 60 * 1000);
+
 const VALID_REWARDS = [10, 20, 100, 500, 1000];
 
-// ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ========== UPDATE USER (FIXED - WITH ALL FIELDS) ==========
+app.post('/api/user/update', async (req, res) => {
+    const { 
+        telegram_id, total_coins, watched_count, referral_coins,
+        last_daily_bonus, task_join_channel,
+        hourly_bonus_ads, hourly_bonus_claim_time, hourly_bonus_last_claim_time,
+        daily_challenge_ads, daily_challenge_claim_time, daily_challenge_last_claim_time
+    } = req.body;
+    
+    if (!telegram_id) {
+        return res.json({ ok: false, error: "missing_telegram_id" });
+    }
+    
+    try {
+        const updateData = {};
+        if (total_coins !== undefined) updateData.total_coins = total_coins;
+        if (watched_count !== undefined) updateData.watched_count = watched_count;
+        if (referral_coins !== undefined) updateData.referral_coins = referral_coins;
+        if (last_daily_bonus !== undefined) updateData.last_daily_bonus = last_daily_bonus;
+        if (task_join_channel !== undefined) updateData.task_join_channel = task_join_channel;
+        if (hourly_bonus_ads !== undefined) updateData.hourly_bonus_ads = hourly_bonus_ads;
+        if (hourly_bonus_claim_time !== undefined) updateData.hourly_bonus_claim_time = hourly_bonus_claim_time;
+        if (hourly_bonus_last_claim_time !== undefined) updateData.hourly_bonus_last_claim_time = hourly_bonus_last_claim_time;
+        if (daily_challenge_ads !== undefined) updateData.daily_challenge_ads = daily_challenge_ads;
+        if (daily_challenge_claim_time !== undefined) updateData.daily_challenge_claim_time = daily_challenge_claim_time;
+        if (daily_challenge_last_claim_time !== undefined) updateData.daily_challenge_last_claim_time = daily_challenge_last_claim_time;
+        
+        updateData.last_sync = new Date().toISOString();
+        
+        const { error } = await supabase
+            .from('users')
+            .update(updateData)
+            .eq('telegram_id', telegram_id);
+        
+        if (error) throw error;
+        
+        console.log(`✅ User ${telegram_id} updated:`, updateData);
+        res.json({ ok: true });
+        
+    } catch (error) {
+        console.error("Update error:", error);
+        res.json({ ok: false, error: error.message });
+    }
+});
+
+// ========== GET USER (FIXED - WITH ALL FIELDS) ==========
+app.get('/api/user/:telegram_id', async (req, res) => {
+    const { telegram_id } = req.params;
+    
+    const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('telegram_id', telegram_id)
+        .single();
+    
+    if (error) {
+        return res.json({ ok: false, error: error.message });
+    }
+    
+    res.json({ ok: true, user: data });
 });
 
 // ========== CLAIM REWARD ==========
@@ -36,33 +91,25 @@ app.post('/api/claim-reward', async (req, res) => {
     
     console.log(`💰 Claim: user=${telegram_id}, amount=${reward}, action=${action_id}`);
     
-    // 1. بررسی وجود فیلدها
     if (!telegram_id || !reward || !action_id) {
         return res.json({ ok: false, error: "missing_fields" });
     }
     
-    // 2. RATE LIMIT CHECK (جدید)
+    // Rate limit check
     const now = Date.now();
     const lastRequest = rateLimit.get(telegram_id) || 0;
     if (now - lastRequest < 3000) {
-        console.log(`⚠️ Rate limit hit for user ${telegram_id}`);
-        return res.json({ ok: false, error: "too_fast", message: "Please wait 3 seconds between requests" });
+        return res.json({ ok: false, error: "too_fast" });
     }
     rateLimit.set(telegram_id, now);
     
-    // 3. بررسی دابل کلیک
+    // Duplicate check
     if (usedActions.has(action_id)) {
-        console.log("⚠️ Duplicate!");
         return res.json({ ok: false, error: "duplicate" });
     }
     
-    // 4. بررسی مقدار جایزه
     if (!VALID_REWARDS.includes(reward)) {
         return res.json({ ok: false, error: "invalid_reward" });
-    }
-    
-    if (reward < 0 || reward > 1000) {
-        return res.json({ ok: false, error: "reward_out_of_range" });
     }
     
     usedActions.add(action_id);
@@ -94,33 +141,14 @@ app.post('/api/claim-reward', async (req, res) => {
         await supabase.from('reward_claims').insert({ action_id, user_id: telegram_id, amount: reward });
         
         console.log(`✅ Success! New coins: ${newCoins}`);
-        return res.json({ ok: true, newCoins: newCoins });
+        res.json({ ok: true, newCoins: newCoins });
         
     } catch (error) {
-        console.error("❌ Error:", error);
+        console.error("Error:", error);
         usedActions.delete(action_id);
-        return res.json({ ok: false, error: "server_error" });
+        res.json({ ok: false, error: "server_error" });
     }
-});
-
-// ========== GET USER INFO ==========
-app.get('/api/user/:telegram_id', async (req, res) => {
-    const { telegram_id } = req.params;
-    
-    const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('telegram_id', telegram_id)
-        .single();
-    
-    if (error) {
-        return res.json({ ok: false, error: error.message });
-    }
-    
-    return res.json({ ok: true, user: data });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`✅ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
