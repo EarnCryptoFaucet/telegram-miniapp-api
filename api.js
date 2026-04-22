@@ -23,52 +23,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ========== UPDATE USER (FIXED - WITH ALL FIELDS) ==========
-app.post('/api/user/update', async (req, res) => {
-    const { 
-        telegram_id, total_coins, watched_count, referral_coins,
-        last_daily_bonus, task_join_channel,
-        hourly_bonus_ads, hourly_bonus_claim_time, hourly_bonus_last_claim_time,
-        daily_challenge_ads, daily_challenge_claim_time, daily_challenge_last_claim_time
-    } = req.body;
-    
-    if (!telegram_id) {
-        return res.json({ ok: false, error: "missing_telegram_id" });
-    }
-    
-    try {
-        const updateData = {};
-        if (total_coins !== undefined) updateData.total_coins = total_coins;
-        if (watched_count !== undefined) updateData.watched_count = watched_count;
-        if (referral_coins !== undefined) updateData.referral_coins = referral_coins;
-        if (last_daily_bonus !== undefined) updateData.last_daily_bonus = last_daily_bonus;
-        if (task_join_channel !== undefined) updateData.task_join_channel = task_join_channel;
-        if (hourly_bonus_ads !== undefined) updateData.hourly_bonus_ads = hourly_bonus_ads;
-        if (hourly_bonus_claim_time !== undefined) updateData.hourly_bonus_claim_time = hourly_bonus_claim_time;
-        if (hourly_bonus_last_claim_time !== undefined) updateData.hourly_bonus_last_claim_time = hourly_bonus_last_claim_time;
-        if (daily_challenge_ads !== undefined) updateData.daily_challenge_ads = daily_challenge_ads;
-        if (daily_challenge_claim_time !== undefined) updateData.daily_challenge_claim_time = daily_challenge_claim_time;
-        if (daily_challenge_last_claim_time !== undefined) updateData.daily_challenge_last_claim_time = daily_challenge_last_claim_time;
-        
-        updateData.last_sync = new Date().toISOString();
-        
-        const { error } = await supabase
-            .from('users')
-            .update(updateData)
-            .eq('telegram_id', telegram_id);
-        
-        if (error) throw error;
-        
-        console.log(`✅ User ${telegram_id} updated:`, updateData);
-        res.json({ ok: true });
-        
-    } catch (error) {
-        console.error("Update error:", error);
-        res.json({ ok: false, error: error.message });
-    }
-});
-
-// ========== GET USER (FIXED - WITH ALL FIELDS) ==========
+// ========== GET USER (WITH ALL FIELDS) ==========
 app.get('/api/user/:telegram_id', async (req, res) => {
     const { telegram_id } = req.params;
     
@@ -82,7 +37,61 @@ app.get('/api/user/:telegram_id', async (req, res) => {
         return res.json({ ok: false, error: error.message });
     }
     
+    console.log("📥 User data loaded:", {
+        hourly_bonus_ads: data.hourly_bonus_ads,
+        daily_challenge_ads: data.daily_challenge_ads,
+        last_daily_bonus: data.last_daily_bonus
+    });
+    
     res.json({ ok: true, user: data });
+});
+
+// ========== UPDATE USER (WITH ALL FIELDS) ==========
+app.post('/api/user/update', async (req, res) => {
+    const updateData = req.body;
+    const { telegram_id } = updateData;
+    
+    if (!telegram_id) {
+        return res.json({ ok: false, error: "missing_telegram_id" });
+    }
+    
+    console.log("📤 Updating user:", {
+        telegram_id,
+        hourly_bonus_ads: updateData.hourly_bonus_ads,
+        daily_challenge_ads: updateData.daily_challenge_ads,
+        hourly_bonus_last_claim_time: updateData.hourly_bonus_last_claim_time,
+        daily_challenge_last_claim_time: updateData.daily_challenge_last_claim_time,
+        last_daily_bonus: updateData.last_daily_bonus
+    });
+    
+    try {
+        const { error } = await supabase
+            .from('users')
+            .update({
+                total_coins: updateData.total_coins,
+                watched_count: updateData.watched_count,
+                referral_coins: updateData.referral_coins,
+                last_daily_bonus: updateData.last_daily_bonus,
+                task_join_channel: updateData.task_join_channel,
+                hourly_bonus_ads: updateData.hourly_bonus_ads,
+                hourly_bonus_claim_time: updateData.hourly_bonus_claim_time,
+                hourly_bonus_last_claim_time: updateData.hourly_bonus_last_claim_time,
+                daily_challenge_ads: updateData.daily_challenge_ads,
+                daily_challenge_claim_time: updateData.daily_challenge_claim_time,
+                daily_challenge_last_claim_time: updateData.daily_challenge_last_claim_time,
+                last_sync: new Date().toISOString()
+            })
+            .eq('telegram_id', telegram_id);
+        
+        if (error) throw error;
+        
+        console.log("✅ User updated successfully");
+        res.json({ ok: true });
+        
+    } catch (error) {
+        console.error("Update error:", error);
+        res.json({ ok: false, error: error.message });
+    }
 });
 
 // ========== CLAIM REWARD ==========
